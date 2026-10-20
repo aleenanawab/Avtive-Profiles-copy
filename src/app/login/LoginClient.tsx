@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { DualScreenWorkspace } from '@/components/DualScreenWorkspace';
 import { usePortfolioTheme } from '@/context/ThemeContext';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
 
 import { sanitizeReturnUrl, resolveReturnUrlForExistingUser } from '@/lib/utils';
 
@@ -139,6 +139,13 @@ export default function LoginClient() {
     setIsLoading(true);
     setErrorMessage(null);
     try {
+      if (!supabaseUrl || !supabaseAnonKey) {
+        setErrorMessage('Google Authentication is not configured. Please ensure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are set in your environment variables.');
+        setIsLoading(false);
+        setIsGoogleLoading(false);
+        return;
+      }
+
       const returnUrl = getReturnUrl();
       if (returnUrl) {
         try {

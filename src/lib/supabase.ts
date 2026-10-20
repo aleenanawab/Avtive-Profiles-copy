@@ -26,31 +26,55 @@ function isServiceRoleKey(key: string): boolean {
   return false;
 }
 
-export const supabaseUrl = (cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL) || 'https://hprlnnbnzomgvscmyane.supabase.co').replace(/\/+$/, '');
-const fallbackKey = 'sb_publishable_bNsqgK4UHrzGybL-a6hjJg_07aZL1_7';
+export const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL).replace(/\/+$/, '');
 
 const rawAnonKey = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) || cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
-// Protect against accidental exposure or usage of service_role key as anon key:
-export const supabaseAnonKey = (rawAnonKey && !isServiceRoleKey(rawAnonKey)) ? rawAnonKey : fallbackKey;
 
-export const supabaseServiceKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY) || supabaseAnonKey;
+if (rawAnonKey && isServiceRoleKey(rawAnonKey)) {
+  console.warn('[Supabase Config] WARNING: NEXT_PUBLIC_SUPABASE_ANON_KEY appears to be a service_role key. Service-role keys must never be exposed to the client or used as anon key.');
+}
+
+// Protect against accidental exposure or usage of service_role key as anon key:
+export const supabaseAnonKey = (rawAnonKey && !isServiceRoleKey(rawAnonKey)) ? rawAnonKey : '';
+
+// Server-only service role key for privileged database operations (never exposed to client)
+export const supabaseServiceKey = typeof window === 'undefined' ? cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY) : '';
 
 export const SUPABASE_AUTH_STORAGE_KEY = 'sb-avtive-auth-token';
 
 // Public client for browser / client-side operations using official @supabase/ssr
-export const supabase = createBrowserClient(supabaseUrl, supabaseAnonKey);
+// Initializes if env vars are present, or uses a safe placeholder for SSR/build phase
+export const supabase = (supabaseUrl && supabaseAnonKey)
+  ? createBrowserClient(supabaseUrl, supabaseAnonKey)
+  : createBrowserClient('https://placeholder.supabase.co', 'placeholder-anon-key');
+
+export const isSupabaseConfigured = Boolean(
+  supabaseUrl &&
+  !supabaseUrl.includes('placeholder.supabase.co') &&
+  (supabaseServiceKey || supabaseAnonKey)
+);
 
 // Admin / Server client with elevated privileges for server route handlers
 // Instantiated ONLY on the server to prevent duplicate GoTrueClient instances in the browser
 export const supabaseAdmin = typeof window === 'undefined'
-  ? createClient(supabaseUrl, supabaseServiceKey, {
-      auth: {
-        storageKey: 'sb-avtive-admin-token',
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
-      }
-    })
+  ? (isSupabaseConfigured
+      ? createClient(supabaseUrl, supabaseServiceKey || supabaseAnonKey, {
+          auth: {
+            storageKey: 'sb-avtive-admin-token',
+            persistSession: false,
+            autoRefreshToken: false,
+            detectSessionInUrl: false,
+          }
+        })
+      : createClient('https://placeholder.supabase.co', 'placeholder-service-key', {
+          auth: {
+            storageKey: 'sb-avtive-admin-token',
+            persistSession: false,
+            autoRefreshToken: false,
+            detectSessionInUrl: false,
+          }
+        })
+    )
   : (null as any);
 
 export const PROFILES_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'profiles';
@@ -93,6 +117,9 @@ export async function uploadToSupabaseStorage(
   preferredBucket: string = PROFILES_STORAGE_BUCKET
 ): Promise<{ success: boolean; url?: string; error?: string; bucket?: string }> {
   try {
+    if (!supabaseAdmin || !isSupabaseConfigured) {
+      return { success: false, error: 'Supabase storage is not configured or missing credentials' };
+    }
     const bucketsToTry = [preferredBucket, ...CANDIDATE_BUCKETS.filter(b => b !== preferredBucket)];
 
     let lastError: any = null;

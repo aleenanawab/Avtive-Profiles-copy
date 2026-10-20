@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { supabaseAdmin, SUPABASE_DEFAULT_AVATAR, SUPABASE_DEFAULT_COVER } from '@/lib/supabase';
+import { supabaseAdmin, SUPABASE_DEFAULT_AVATAR, SUPABASE_DEFAULT_COVER, isSupabaseConfigured } from '@/lib/supabase';
 import { ProfileData, UserRecord, ProfileTheme, ProfileType, UserConnection, normalizeProfileType, TeamMemberItem } from '@/types/profile';
 import { 
   CompanyRecord, 
@@ -46,6 +46,7 @@ async function withTimeout<T = any>(promise: PromiseLike<T> | any, ms: number = 
 }
 
 async function asyncSyncSupabase(action: PromiseLike<any>) {
+  if (!isSupabaseConfigured) return;
   try {
     await withTimeout(action, 6000);
   } catch {}
@@ -473,43 +474,45 @@ export async function getUserByEmail(email: string): Promise<UserRecord | null> 
   if (user) return user;
 
   // Supabase lookup fallback
-  try {
-    const { data, error } = await withTimeout(
-      supabaseAdmin
-        .from('users')
-        .select('*')
-        .ilike('email', normalizedEmail)
-        .maybeSingle(),
-      6000
-    );
-
-    if (data && !error) {
-      // Check if user has completed onboarding by checking profile
-      const profQuery = isUuidString(data.id)
-        ? supabaseAdmin.from('profiles').select('id, designation, short_bio, skills').or(`user_id.eq.${data.id},email.eq.${normalizedEmail}`).limit(1)
-        : supabaseAdmin.from('profiles').select('id, designation, short_bio, skills').eq('email', normalizedEmail).limit(1);
-
-      const { data: profData } = await withTimeout(profQuery, 4000).catch(() => ({ data: null }));
-
-      const hasSavedContent = Boolean(
-        profData && profData.length > 0 &&
-        (profData[0].designation || profData[0].short_bio || (Array.isArray(profData[0].skills) && profData[0].skills.length > 0))
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await withTimeout(
+        supabaseAdmin
+          .from('users')
+          .select('*')
+          .ilike('email', normalizedEmail)
+          .maybeSingle(),
+        6000
       );
 
-      const su: UserRecord = {
-        id: data.id,
-        name: data.name,
-        email: data.email,
-        passwordHash: data.password_hash || data.passwordHash,
-        resetToken: data.reset_token || data.resetToken,
-        resetTokenExpires: data.reset_token_expires || data.resetTokenExpires,
-        onboardingCompleted: hasSavedContent,
-        createdAt: data.created_at || data.createdAt || new Date().toISOString()
-      };
-      db.users.push(su);
-      return su;
-    }
-  } catch {}
+      if (data && !error) {
+        // Check if user has completed onboarding by checking profile
+        const profQuery = isUuidString(data.id)
+          ? supabaseAdmin.from('profiles').select('id, designation, short_bio, skills').or(`user_id.eq.${data.id},email.eq.${normalizedEmail}`).limit(1)
+          : supabaseAdmin.from('profiles').select('id, designation, short_bio, skills').eq('email', normalizedEmail).limit(1);
+
+        const { data: profData } = await withTimeout(profQuery, 4000).catch(() => ({ data: null }));
+
+        const hasSavedContent = Boolean(
+          profData && profData.length > 0 &&
+          (profData[0].designation || profData[0].short_bio || (Array.isArray(profData[0].skills) && profData[0].skills.length > 0))
+        );
+
+        const su: UserRecord = {
+          id: data.id,
+          name: data.name,
+          email: data.email,
+          passwordHash: data.password_hash || data.passwordHash,
+          resetToken: data.reset_token || data.resetToken,
+          resetTokenExpires: data.reset_token_expires || data.resetTokenExpires,
+          onboardingCompleted: hasSavedContent,
+          createdAt: data.created_at || data.createdAt || new Date().toISOString()
+        };
+        db.users.push(su);
+        return su;
+      }
+    } catch {}
+  }
 
   try {
     const { cookies } = await import('next/headers');
@@ -546,29 +549,31 @@ export async function getUserById(id: string): Promise<UserRecord | null> {
   if (user) return user;
 
   // Supabase lookup fallback
-  try {
-    const { data, error } = await withTimeout(
-      supabaseAdmin
-        .from('users')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle()
-    );
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await withTimeout(
+        supabaseAdmin
+          .from('users')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle()
+      );
 
-    if (data && !error) {
-      const su: UserRecord = {
-        id: data.id,
-        name: data.name,
-        email: data.email,
-        passwordHash: data.password_hash || data.passwordHash,
-        resetToken: data.reset_token || data.resetToken,
-        resetTokenExpires: data.reset_token_expires || data.resetTokenExpires,
-        createdAt: data.created_at || data.createdAt || new Date().toISOString()
-      };
-      db.users.push(su);
-      return su;
-    }
-  } catch {}
+      if (data && !error) {
+        const su: UserRecord = {
+          id: data.id,
+          name: data.name,
+          email: data.email,
+          passwordHash: data.password_hash || data.passwordHash,
+          resetToken: data.reset_token || data.resetToken,
+          resetTokenExpires: data.reset_token_expires || data.resetTokenExpires,
+          createdAt: data.created_at || data.createdAt || new Date().toISOString()
+        };
+        db.users.push(su);
+        return su;
+      }
+    } catch {}
+  }
 
   return null;
 }
@@ -1192,29 +1197,31 @@ export async function getProfileByIdOrSlug(idOrSlug: string): Promise<ProfileDat
   }
 
   // Supabase lookup fallback across serverless lambdas
-  try {
-    const isIdUuid = isUuidString(idOrSlug);
-    const filter = isIdUuid
-      ? `id.eq.${idOrSlug},user_id.eq.${idOrSlug},slug.eq.${idOrSlug}`
-      : `slug.eq.${idOrSlug},slug.eq.${clean}`;
+  if (isSupabaseConfigured) {
+    try {
+      const isIdUuid = isUuidString(idOrSlug);
+      const filter = isIdUuid
+        ? `id.eq.${idOrSlug},user_id.eq.${idOrSlug},slug.eq.${idOrSlug}`
+        : `slug.eq.${idOrSlug},slug.eq.${clean}`;
 
-    const { data, error } = await withTimeout(
-      supabaseAdmin
-        .from('profiles')
-        .select('*')
-        .or(filter)
-        .maybeSingle(),
-      6000
-    );
+      const { data, error } = await withTimeout(
+        supabaseAdmin
+          .from('profiles')
+          .select('*')
+          .or(filter)
+          .maybeSingle(),
+        6000
+      );
 
-    if (data && !error) {
-      const sp = mapSupabaseProfileToProfileData(data);
-      normalizeProfiles({ [sp.id]: sp });
-      db.profiles[sp.id] = sp;
-      db.profiles[sp.slug] = sp;
-      return hydrateProfileData(sp, db);
-    }
-  } catch {}
+      if (data && !error) {
+        const sp = mapSupabaseProfileToProfileData(data);
+        normalizeProfiles({ [sp.id]: sp });
+        db.profiles[sp.id] = sp;
+        db.profiles[sp.slug] = sp;
+        return hydrateProfileData(sp, db);
+      }
+    } catch {}
+  }
 
   // Cookie fallback for newly created/updated profiles across serverless lambdas
   try {
@@ -1277,32 +1284,34 @@ export async function getProfileByUserId(userId: string): Promise<ProfileData | 
   }
 
   // 3. Supabase lookup fallback across serverless lambdas
-  try {
-    const isUserUuid = isUuidString(userId);
-    const filter = isUserUuid
-      ? `user_id.eq.${userId}${userEmail ? `,email.eq.${userEmail}` : ''}`
-      : (userEmail ? `email.eq.${userEmail}` : '');
+  if (isSupabaseConfigured) {
+    try {
+      const isUserUuid = isUuidString(userId);
+      const filter = isUserUuid
+        ? `user_id.eq.${userId}${userEmail ? `,email.eq.${userEmail}` : ''}`
+        : (userEmail ? `email.eq.${userEmail}` : '');
 
-    if (filter) {
-      const { data, error } = await withTimeout(
-        supabaseAdmin
-          .from('profiles')
-          .select('*')
-          .or(filter)
-          .limit(1),
-        6000
-      );
+      if (filter) {
+        const { data, error } = await withTimeout(
+          supabaseAdmin
+            .from('profiles')
+            .select('*')
+            .or(filter)
+            .limit(1),
+          6000
+        );
 
-      if (data && !error && data.length > 0) {
-        const item = data[0];
-        const sp = mapSupabaseProfileToProfileData(item, userId, user?.role);
-        normalizeProfiles({ [sp.id]: sp });
-        db.profiles[sp.id] = sp;
-        db.profiles[sp.slug] = sp;
-        return sp;
+        if (data && !error && data.length > 0) {
+          const item = data[0];
+          const sp = mapSupabaseProfileToProfileData(item, userId, user?.role);
+          normalizeProfiles({ [sp.id]: sp });
+          db.profiles[sp.id] = sp;
+          db.profiles[sp.slug] = sp;
+          return sp;
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   try {
     const { cookies } = await import('next/headers');
@@ -1336,7 +1345,7 @@ export async function getProfilesByUserId(userId: string): Promise<ProfileData[]
     }
   }
 
-  if (unique.size === 0) {
+  if (unique.size === 0 && isSupabaseConfigured) {
     try {
       const isUserUuid = isUuidString(userId);
       const filter = isUserUuid
@@ -2225,34 +2234,36 @@ export async function getCompanyById(id: string): Promise<CompanyRecord | null> 
   }
 
   // Supabase fallback
-  try {
-    const { data, error } = await withTimeout(
-      supabaseAdmin.from('companies').select('*').eq('id', id).maybeSingle()
-    );
-    if (data && !error) {
-      const rec: CompanyRecord = {
-        id: data.id,
-        ownerUserId: data.owner_user_id || data.ownerUserId,
-        name: data.name,
-        slug: data.slug,
-        tagline: data.tagline || '',
-        description: data.description || '',
-        industry: data.industry || '',
-        size: data.size || '',
-        website: data.website || '',
-        location: data.location || '',
-        logoUrl: data.logo_url || data.logoUrl || '',
-        coverUrl: data.cover_url || data.coverUrl || '',
-        theme: data.theme || 'editorial',
-        visibility: data.visibility || { ...DEFAULT_SECTION_VISIBILITY },
-        createdAt: data.created_at || data.createdAt || new Date().toISOString(),
-        updatedAt: data.updated_at || data.updatedAt || new Date().toISOString()
-      };
-      if (!db.companies) db.companies = [];
-      db.companies.push(rec);
-      return rec;
-    }
-  } catch {}
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await withTimeout(
+        supabaseAdmin.from('companies').select('*').eq('id', id).maybeSingle()
+      );
+      if (data && !error) {
+        const rec: CompanyRecord = {
+          id: data.id,
+          ownerUserId: data.owner_user_id || data.ownerUserId,
+          name: data.name,
+          slug: data.slug,
+          tagline: data.tagline || '',
+          description: data.description || '',
+          industry: data.industry || '',
+          size: data.size || '',
+          website: data.website || '',
+          location: data.location || '',
+          logoUrl: data.logo_url || data.logoUrl || '',
+          coverUrl: data.cover_url || data.coverUrl || '',
+          theme: data.theme || 'editorial',
+          visibility: data.visibility || { ...DEFAULT_SECTION_VISIBILITY },
+          createdAt: data.created_at || data.createdAt || new Date().toISOString(),
+          updatedAt: data.updated_at || data.updatedAt || new Date().toISOString()
+        };
+        if (!db.companies) db.companies = [];
+        db.companies.push(rec);
+        return rec;
+      }
+    } catch {}
+  }
 
   // Profile entity fallback: check if id matches a team profile
   const matchedProfile = db.profiles[id] || Object.values(db.profiles).find((p) => p.id === id);
@@ -2273,34 +2284,36 @@ export async function getCompanyBySlug(slug: string): Promise<CompanyRecord | nu
   }
 
   // Supabase fallback
-  try {
-    const { data, error } = await withTimeout(
-      supabaseAdmin.from('companies').select('*').or(`slug.eq.${clean},id.eq.${slug}`).maybeSingle()
-    );
-    if (data && !error) {
-      const rec: CompanyRecord = {
-        id: data.id,
-        ownerUserId: data.owner_user_id || data.ownerUserId,
-        name: data.name,
-        slug: data.slug,
-        tagline: data.tagline || '',
-        description: data.description || '',
-        industry: data.industry || '',
-        size: data.size || '',
-        website: data.website || '',
-        location: data.location || '',
-        logoUrl: data.logo_url || data.logoUrl || '',
-        coverUrl: data.cover_url || data.coverUrl || '',
-        theme: data.theme || 'editorial',
-        visibility: data.visibility || { ...DEFAULT_SECTION_VISIBILITY },
-        createdAt: data.created_at || data.createdAt || new Date().toISOString(),
-        updatedAt: data.updated_at || data.updatedAt || new Date().toISOString()
-      };
-      if (!db.companies) db.companies = [];
-      db.companies.push(rec);
-      return rec;
-    }
-  } catch {}
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await withTimeout(
+        supabaseAdmin.from('companies').select('*').or(`slug.eq.${clean},id.eq.${slug}`).maybeSingle()
+      );
+      if (data && !error) {
+        const rec: CompanyRecord = {
+          id: data.id,
+          ownerUserId: data.owner_user_id || data.ownerUserId,
+          name: data.name,
+          slug: data.slug,
+          tagline: data.tagline || '',
+          description: data.description || '',
+          industry: data.industry || '',
+          size: data.size || '',
+          website: data.website || '',
+          location: data.location || '',
+          logoUrl: data.logo_url || data.logoUrl || '',
+          coverUrl: data.cover_url || data.coverUrl || '',
+          theme: data.theme || 'editorial',
+          visibility: data.visibility || { ...DEFAULT_SECTION_VISIBILITY },
+          createdAt: data.created_at || data.createdAt || new Date().toISOString(),
+          updatedAt: data.updated_at || data.updatedAt || new Date().toISOString()
+        };
+        if (!db.companies) db.companies = [];
+        db.companies.push(rec);
+        return rec;
+      }
+    } catch {}
+  }
 
   // Profile entity fallback: check if slug matches a team profile
   const matchedProfBySlug = db.profiles[clean] || Object.values(db.profiles).find((p) => (p.slug && p.slug.toLowerCase().trim() === clean) || p.id === slug);
@@ -2331,38 +2344,40 @@ export async function getCompanyByOwnerUserId(userId: string): Promise<CompanyRe
   }
 
   // Supabase fallback
-  try {
-    const { data } = await withTimeout(
-      supabaseAdmin
-        .from('companies')
-        .select('*')
-        .eq('owner_user_id', userId)
-        .maybeSingle()
-    );
-    if (data) {
-      const rec: CompanyRecord = {
-        id: data.id,
-        ownerUserId: data.owner_user_id || data.ownerUserId,
-        name: data.name,
-        slug: data.slug,
-        tagline: data.tagline || '',
-        description: data.description || '',
-        industry: data.industry || 'Technology',
-        size: data.size || '1-10',
-        website: data.website || '',
-        location: data.location || '',
-        logoUrl: data.logo_url || data.logoUrl || SUPABASE_DEFAULT_AVATAR,
-        coverUrl: data.cover_url || data.coverUrl || SUPABASE_DEFAULT_COVER,
-        theme: data.theme || 'editorial',
-        visibility: data.visibility || { ...DEFAULT_SECTION_VISIBILITY },
-        createdAt: data.created_at || new Date().toISOString(),
-        updatedAt: data.updated_at || new Date().toISOString()
-      };
-      if (!db.companies) db.companies = [];
-      db.companies.push(rec);
-      return rec;
-    }
-  } catch {}
+  if (isSupabaseConfigured) {
+    try {
+      const { data } = await withTimeout(
+        supabaseAdmin
+          .from('companies')
+          .select('*')
+          .eq('owner_user_id', userId)
+          .maybeSingle()
+      );
+      if (data) {
+        const rec: CompanyRecord = {
+          id: data.id,
+          ownerUserId: data.owner_user_id || data.ownerUserId,
+          name: data.name,
+          slug: data.slug,
+          tagline: data.tagline || '',
+          description: data.description || '',
+          industry: data.industry || 'Technology',
+          size: data.size || '1-10',
+          website: data.website || '',
+          location: data.location || '',
+          logoUrl: data.logo_url || data.logoUrl || SUPABASE_DEFAULT_AVATAR,
+          coverUrl: data.cover_url || data.coverUrl || SUPABASE_DEFAULT_COVER,
+          theme: data.theme || 'editorial',
+          visibility: data.visibility || { ...DEFAULT_SECTION_VISIBILITY },
+          createdAt: data.created_at || new Date().toISOString(),
+          updatedAt: data.updated_at || new Date().toISOString()
+        };
+        if (!db.companies) db.companies = [];
+        db.companies.push(rec);
+        return rec;
+      }
+    } catch {}
+  }
 
   return null;
 }
